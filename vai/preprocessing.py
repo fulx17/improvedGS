@@ -109,6 +109,19 @@ def _embed_alpha_masks(undistorted_images: Path, mask_images: Path) -> int:
     return len(image_by_stem)
 
 
+def _embed_full_alpha_masks(image_dir: Path) -> int:
+    """Gan alpha=255 toan bo cho anh da la PINHOLE (khong can COLMAP mask)."""
+    count = 0
+    for path in sorted(item for item in image_dir.iterdir() if item.is_file()):
+        rgb = np.asarray(Image.open(path).convert("RGB"))
+        alpha = np.full(rgb.shape[:2], 255, dtype=np.uint8)
+        output_path = path.with_suffix(".png")
+        Image.fromarray(np.dstack([rgb, alpha]), mode="RGBA").save(output_path)
+        if output_path != path:
+            path.unlink()
+        count += 1
+    return count
+
 def _build_white_images(source_images: Path, white_images: Path) -> None:
     """Tao anh trang de COLMAP sinh mask hinh hoc chinh xac."""
     white_images.mkdir(parents=True, exist_ok=True)
@@ -207,6 +220,14 @@ def _replace_with_undistorted_scene(
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def _finalize_already_pinhole_scene(work_scene: Path) -> tuple[int, int]:
+    """Chuan hoa scene da PINHOLE/SIMPLE_PINHOLE: embed alpha full, sync ten PNG."""
+    images_dir = work_scene / "images"
+    sparse_dir = work_scene / "sparse" / "0"
+    embedded_count = _embed_full_alpha_masks(images_dir)
+    registered_count = _synchronize_and_filter_images(sparse_dir, images_dir)
+    return embedded_count, registered_count
+
 def validate_processed_scene(scene_path: str | Path) -> dict[str, Any]:
     """Kiem tra scene da san sang cho train va render VAI."""
     scene_path = Path(scene_path)
@@ -267,6 +288,7 @@ def preprocess_scene(
     min_scale: float = 1.0,
     max_scale: float = 2.0,
     overwrite: bool = False,
+    force_undistort: bool = False,
 ) -> dict[str, Any]:
     """Chuyen mot scene raw VAI thanh scene ImprovedGS co metadata distortion."""
     source_scene = Path(source_scene)
@@ -285,18 +307,27 @@ def preprocess_scene(
     try:
         _copy_raw_scene(source_scene, work_scene)
         original_camera = _single_camera(work_scene / "sparse" / "0")
-        if original_camera.model != "SIMPLE_RADIAL":
-            raise ValueError(
-                f"Camera raw VAI phai la SIMPLE_RADIAL, nhan duoc {original_camera.model}"
-            )
+        needs_undistort = force_undistort or original_camera.model == "SIMPLE_RADIAL"
 
-        embedded_count, registered_count = _replace_with_undistorted_scene(
-            work_scene,
-            colmap_executable,
-            blank_pixels,
-            min_scale,
-            max_scale,
-        )
+        if needs_undistort:
+            if original_camera.model not in {"SIMPLE_RADIAL", "PINHOLE", "SIMPLE_PINHOLE"}:
+                raise ValueError(
+                    f"Camera raw VAI khong ho tro, nhan duoc {original_camera.model}"
+                )
+            embedded_count, registered_count = _replace_with_undistorted_scene(
+                work_scene,
+                colmap_executable,
+                blank_pixels,
+                min_scale,
+                max_scale,
+            )
+        elif original_camera.model in {"PINHOLE", "SIMPLE_PINHOLE"}:
+            embedded_count, registered_count = _finalize_already_pinhole_scene(work_scene)
+        else:
+            raise ValueError(
+                f"Camera raw VAI phai la SIMPLE_RADIAL, PINHOLE hoac SIMPLE_PINHOLE, "
+                f"nhan duoc {original_camera.model}"
+            )
         undistorted_camera = _single_camera(work_scene / "sparse" / "0")
         pose_count = len(read_pose_rows(work_scene / "test" / "test_poses.csv"))
         metadata = {
@@ -309,11 +340,15 @@ def preprocess_scene(
             "test_pose_count": pose_count,
             "test_poses": "test/test_poses.csv",
             "test_images": "test/images",
-            "undistort": {
-                "blank_pixels": float(blank_pixels),
-                "min_scale": float(min_scale),
-                "max_scale": float(max_scale),
-            },
+            "undistort": (
+                {
+                    "blank_pixels": float(blank_pixels),
+                    "min_scale": float(min_scale),
+                    "max_scale": float(max_scale),
+                }
+                if needs_undistort
+                else None
+            ),
         }
         save_json(work_scene / VAI_METADATA_FILENAME, metadata)
         validation = validate_processed_scene(work_scene)

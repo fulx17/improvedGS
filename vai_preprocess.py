@@ -18,6 +18,11 @@ def main() -> int:
     parser.add_argument("--min_scale", type=float, default=1.0)
     parser.add_argument("--max_scale", type=float, default=2.0)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--force_undistort",
+        action="store_true",
+        help="Ep chay COLMAP undistort ngay ca khi camera da PINHOLE/SIMPLE_PINHOLE",
+    )
     parser.add_argument("--validate_only", action="store_true")
     args = parser.parse_args()
 
@@ -36,6 +41,7 @@ def main() -> int:
             min_scale=args.min_scale,
             max_scale=args.max_scale,
             overwrite=args.overwrite,
+            force_undistort=args.force_undistort,
         )
     print(json.dumps(results, ensure_ascii=False, indent=2))
     return 0
