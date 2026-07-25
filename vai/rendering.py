@@ -52,6 +52,11 @@ def _single_undistorted_camera(source_path: Path) -> Any:
     }
 
 
+def _needs_redistort(metadata: dict[str, Any]) -> bool:
+    """Xac dinh scene co tung undistort (can redistort lai) hay khong."""
+    return metadata.get("original_camera", {}).get("model") == "SIMPLE_RADIAL"
+
+
 def _original_radial_camera(metadata: dict[str, Any]) -> dict[str, float | int]:
     """Lay intrinsics va he so k tu camera SIMPLE_RADIAL goc."""
     camera = metadata.get("original_camera", {})
@@ -70,9 +75,11 @@ def _original_radial_camera(metadata: dict[str, Any]) -> dict[str, float | int]:
 
 def _validate_pose_intrinsics(
     pose_rows: list[dict[str, str]],
-    original_camera: dict[str, float | int],
+    reference_camera: dict[str, float | int],
 ) -> None:
-    """Chan scene co intrinsics CSV khong khop camera distortion da luu."""
+    """Chan scene co intrinsics CSV khong khop camera tham chieu da luu."""
+    expected_fx = float(reference_camera.get("focal", reference_camera.get("fx", 0.0)))
+    expected_fy = float(reference_camera.get("focal", reference_camera.get("fy", 0.0)))
     for row in pose_rows:
         values = {
             "fx": float(row["fx"]),
@@ -81,20 +88,19 @@ def _validate_pose_intrinsics(
             "cy": float(row["cy"]),
         }
         expected = {
-            "fx": float(original_camera["focal"]),
-            "fy": float(original_camera["focal"]),
-            "cx": float(original_camera["cx"]),
-            "cy": float(original_camera["cy"]),
+            "fx": expected_fx,
+            "fy": expected_fy,
+            "cx": float(reference_camera["cx"]),
+            "cy": float(reference_camera["cy"]),
         }
         if any(abs(values[key] - expected[key]) > 1e-3 for key in expected):
-            raise ValueError(f"Intrinsics CSV khong khop camera goc tai {row['image_name']}")
+            raise ValueError(f"Intrinsics CSV khong khop camera tham chieu tai {row['image_name']}")
         size = (int(float(row["width"])), int(float(row["height"])))
-        expected_size = (int(original_camera["width"]), int(original_camera["height"]))
+        expected_size = (int(reference_camera["width"]), int(reference_camera["height"]))
         if size != expected_size:
             raise ValueError(
-                f"Kich thuoc CSV khong khop camera goc tai {row['image_name']}: {size}!={expected_size}"
+                f"Kich thuoc CSV khong khop camera tham chieu tai {row['image_name']}: {size}!={expected_size}"
             )
-
 
 def camera_from_pose_row(row: dict[str, str], camera: dict[str, Any]) -> MiniCam:
     """Tao camera render nhe tu qvec va tvec COLMAP trong CSV."""
@@ -192,9 +198,14 @@ def render_vai_scene(
     resolved_scene_name = scene_name or str(metadata.get("scene_name") or source_path.name)
     pose_rows = read_pose_rows(source_path / metadata.get("test_poses", "test/test_poses.csv"))
     undistorted_camera = _single_undistorted_camera(source_path)
-    original_camera = _original_radial_camera(metadata)
-    _validate_pose_intrinsics(pose_rows, original_camera)
-    radial_k = float(original_camera["radial_k"])
+    apply_redistort = _needs_redistort(metadata)
+    if apply_redistort:
+        original_camera = _original_radial_camera(metadata)
+        _validate_pose_intrinsics(pose_rows, original_camera)
+        radial_k = float(original_camera["radial_k"])
+    else:
+        _validate_pose_intrinsics(pose_rows, undistorted_camera)
+        radial_k = 0.0
 
     render_root = Path(output_root) if output_root else model_path / "vai_submission"
     png_render_root = Path(png_root) if png_root else model_path / "vai_png"
@@ -225,18 +236,19 @@ def render_vai_scene(
                 track_gradients=False,
                 inference_only=True,
             )["render"]
-            rendering = redistort_and_crop(
-                rendering,
-                focal=float(undistorted_camera["fx"]),
-                render_cx=float(undistorted_camera["cx"]),
-                render_cy=float(undistorted_camera["cy"]),
-                radial_k=radial_k,
-                target_cx=float(row["cx"]),
-                target_cy=float(row["cy"]),
-                target_width=int(float(row["width"])),
-                target_height=int(float(row["height"])),
-                interpolation=redistort_interpolation,
-            )
+            if apply_redistort:
+                rendering = redistort_and_crop(
+                    rendering,
+                    focal=float(undistorted_camera["fx"]),
+                    render_cx=float(undistorted_camera["cx"]),
+                    render_cy=float(undistorted_camera["cy"]),
+                    radial_k=radial_k,
+                    target_cx=float(row["cx"]),
+                    target_cy=float(row["cy"]),
+                    target_width=int(float(row["width"])),
+                    target_height=int(float(row["height"])),
+                    interpolation=redistort_interpolation,
+                )
             rendering = sharpen_image(
                 rendering,
                 amount=sharpen_amount,
@@ -269,6 +281,7 @@ def render_vai_scene(
             "jpeg_subsampling": int(jpeg_subsampling),
             "radial_k": radial_k,
             "undistorted_camera": undistorted_camera,
+            "applied_redistort": apply_redistort,
         }
         save_json(model_path / "vai_render.json", manifest)
 
