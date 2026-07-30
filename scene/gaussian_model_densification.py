@@ -42,6 +42,7 @@ class GaussianModelDensificationMixin:
         new_scaling: torch.Tensor,
         new_rotation: torch.Tensor,
         reset_params: bool = True,
+        new_bts_label: torch.Tensor | None = None,
     ) -> None:
         """
             Append newly created Gaussians to all parameter tensors.
@@ -64,6 +65,13 @@ class GaussianModelDensificationMixin:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+
+        # VAR
+        if self._bts_label.numel() > 0:                                          # << thêm
+            if new_bts_label is None:                                            # << thêm
+                new_bts_label = torch.zeros(new_xyz.shape[0], dtype=torch.int8, device="cuda")  # << thêm (fallback: coi Gaussian mới không có label là background)
+            self._bts_label = torch.cat((self._bts_label, new_bts_label))        # << thêm
+
 
         if reset_params:
             self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -95,6 +103,8 @@ class GaussianModelDensificationMixin:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
+        new_bts_label = (self._bts_label[selected_pts_mask].repeat(N)                     # << thêm
+                          if self._bts_label.numel() > 0 else None)                        # << thêm
 
         self.densification_postfix(
             new_xyz,
@@ -103,6 +113,7 @@ class GaussianModelDensificationMixin:
             new_opacity,
             new_scaling,
             new_rotation,
+            new_bts_label=new_bts_label,                                                  # << thêm
         )
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
@@ -126,6 +137,8 @@ class GaussianModelDensificationMixin:
         new_opacities = self._opacity[selected_pts_mask]
         new_scaling = self._scaling[selected_pts_mask]
         new_rotation = self._rotation[selected_pts_mask]
+        new_bts_label = (self._bts_label[selected_pts_mask]                                # << thêm
+                          if self._bts_label.numel() > 0 else None)                        # << thêm
 
         self.densification_postfix(
             new_xyz,
@@ -134,6 +147,7 @@ class GaussianModelDensificationMixin:
             new_opacities,
             new_scaling,
             new_rotation,
+            new_bts_label=new_bts_label,                                                  # << thêm
         )
 
     def densify_and_prune(
@@ -203,6 +217,8 @@ class GaussianModelDensificationMixin:
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
+        new_bts_label = (self._bts_label[selected_pts_mask].repeat(N)                      # << thêm
+                          if self._bts_label.numel() > 0 else None)                        # << thêm
 
         self.densification_postfix(
             new_xyz,
@@ -211,6 +227,7 @@ class GaussianModelDensificationMixin:
             new_opacity,
             new_scaling,
             new_rotation,
+            new_bts_label=new_bts_label,                                                  # << thêm
         )
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=torch.bool)))
         self.prune_points(prune_filter)
@@ -354,8 +371,14 @@ class GaussianModelDensificationMixin:
         new_rotation = self._rotation[selected_pts_mask].repeat(2, 1)
         new_features_dc = self._features_dc[selected_pts_mask].repeat(2, 1, 1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(2, 1, 1)
+        new_bts_label = (self._bts_label[selected_pts_mask].repeat(2)                      # << thêm
+                          if self._bts_label.numel() > 0 else None)                        # << thêm
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
+        self.densification_postfix(
+            new_xyz, new_features_dc, new_features_rest,
+            new_opacity, new_scaling, new_rotation,
+            new_bts_label=new_bts_label,                                                  # << thêm
+        )
         prune_filter = torch.cat(
             (selected_pts_mask, torch.zeros(2 * int(selected_pts_mask.sum().item()), device="cuda", dtype=torch.bool))
         )

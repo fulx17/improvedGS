@@ -72,6 +72,9 @@ class GaussianModel(
         self.use_mcmc_initialization = False
         self.initial_opacity = 0.1
         self.spatial_lr_scale = 0
+        #VAR
+        self._bts_label = torch.empty(0)   # << thêm: int8, 0=background 1=boundary 2=BTS
+        ###
         self.setup_functions()
 
     def capture(self) -> tuple[Any, ...]:
@@ -152,6 +155,24 @@ class GaussianModel(
             return self._exposure[self.exposure_mapping[image_name]]
         else:
             return self.pretrained_exposures[image_name]
+    #### VAR
+    def set_bts_labels(self, labels) -> None:
+        """
+            Gắn per-Gaussian label (BTS/boundary/background) từ protocol visibility.
+            Bắt buộc gọi ngay sau load_ply(), khi N khớp tuyệt đối.
+        """
+        assert labels.shape[0] == self._xyz.shape[0], \
+            f"label size {labels.shape[0]} != gaussian count {self._xyz.shape[0]}"
+        self._bts_label = torch.as_tensor(labels, dtype=torch.int8, device="cuda")
+
+    @property
+    def is_background(self) -> torch.Tensor:
+        """
+            Bool mask (N,): True o Gaussian background, dung de freeze gradient.
+        """
+        if self._bts_label.numel() == 0:
+            return torch.zeros(self._xyz.shape[0], dtype=torch.bool, device="cuda")
+        return self._bts_label == 0
 
 
 
@@ -184,3 +205,6 @@ class GaussianModel(
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.xyz_gradient_accum_abs = self.xyz_gradient_accum_abs[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
+        #VAR
+        if self._bts_label.numel() > 0:                              
+            self._bts_label = self._bts_label[valid_points_mask]     

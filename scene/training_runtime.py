@@ -251,6 +251,7 @@ def parse_training_arguments(argv: list[str]) -> tuple[Any, Any, Any, Namespace]
     parser.add_argument("--start_checkpoint_dir", type=str, default="")
     parser.add_argument("--start_checkpoint_file", type=str, default="")
     parser.add_argument("--empty_cache_interval", type=int, default=200)
+    parser.add_argument("--bts_scores_csv", type=str, default="")
     args = parser.parse_args(argv)
     return model_params, optimization_params, pipeline_params, args
 

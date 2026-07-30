@@ -7,6 +7,7 @@ view, computes losses, updates model parameters, and optionally changes the
 Gaussian structure.
 """
 import sys
+import os
 from argparse import Namespace
 import torch
 from tqdm import tqdm
@@ -56,9 +57,16 @@ def training(dataset: GroupParams, opt: GroupParams, pipe: GroupParams, runtime_
     # Build shared objects in dependency order: config context, Gaussian model, scene, then optimizer state.
     training_context = build_training_context(dataset, opt, pipe, runtime_args)
     gaussians = build_gaussian_model_3dgs(dataset, opt)
-    scene = Scene(dataset, gaussians, resolution_scales=resolution_scales)
+    scene = Scene(dataset, gaussians, load_iteration=30000, resolution_scales=resolution_scales)
+    
+
     training_context = attach_scene_and_gaussians_to_context(training_context, scene, gaussians)
     gaussians.training_setup(opt)
+
+    # BTS visibility labels: gan ngay sau khi Gaussian da duoc load tu checkpoint 30k
+    from vai.bts_visibility import compute_gaussian_labels
+    bts_labels = compute_gaussian_labels(csv_path=runtime_args.bts_scores_csv)
+    gaussians.set_bts_labels(bts_labels)
 
     # Restore checkpoint state before loop state is built, so later stages see the resumed model.
     first_iter = 0

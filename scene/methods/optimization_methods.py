@@ -94,8 +94,17 @@ def run_3dgs_optimization_method(
         loss = loss + depth_l1_weight(iteration) * depth_l1_pure
 
     loss = apply_regularization_method(context, gaussians, iteration, loss)
-
     loss.backward()
+
+    # --- BTS freeze: khoa gradient cho Gaussian background, chi optimize BTS+boundary ---
+    if getattr(gaussians, "_bts_label", None) is not None and gaussians._bts_label.numel() > 0:
+        with torch.no_grad():
+            freeze = gaussians.is_background  # (N,) bool
+            for p in (gaussians._xyz, gaussians._features_dc, gaussians._features_rest,
+                      gaussians._opacity, gaussians._scaling, gaussians._rotation):
+                if p.grad is not None:
+                    p.grad[freeze] = 0.0
+    # ---
     return {
         "loss": loss,
         "render_state": {
